@@ -11,6 +11,7 @@ import joblib
 import plotly.graph_objects as go
 import plotly.express as px
 from pathlib import Path
+import google.generativeai as genai
 
 # ============================================
 # Page Configuration
@@ -112,9 +113,12 @@ st.markdown("""
 def load_model():
     """Load model and artifacts with caching"""
     try:
-        model = joblib.load('models/churn_model.pkl')
-        scaler = joblib.load('models/scaler.pkl')
-        feature_names = joblib.load('models/feature_names.pkl')
+        model_path = Path(__file__).parent / 'models' / 'churn_model.pkl'
+        scaler_path = Path(__file__).parent / 'models' / 'scaler.pkl'
+        feature_names_path = Path(__file__).parent / 'models' / 'feature_names.pkl'
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+        feature_names = joblib.load(feature_names_path)
         return model, scaler, feature_names, True
     except Exception as e:
         st.error(f"Error loading model: {e}")
@@ -257,13 +261,22 @@ with st.sidebar:
         st.success("🟢 Model Loaded")
     else:
         st.error("🔴 Model Not Found")
-    
+
+    st.markdown("---")
+
+    # Gemini API Configuration
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        st.success("✅ Gemini API Configured")
+    except KeyError:
+        st.error("❌ Gemini API key not found in secrets. Please set GEMINI_API_KEY in Streamlit Cloud secrets.")
+
     st.markdown("---")
     
     # Navigation
     page = st.radio(
         "📍 Navigation",
-        ["🏠 Home", "🔮 Prediction", "📊 Dashboard", "📖 About"],
+        ["🏠 Home", "🔮 Prediction", "📊 Dashboard", "🤖 Chatbot", "📖 About"],
         label_visibility="collapsed"
     )
     
@@ -462,7 +475,36 @@ elif page == "🔮 Prediction":
                 
                 # Get results
                 risk_level, risk_class, emoji, color = get_risk_level(probability)
-                recommendations = get_recommendations(probability, input_data)
+
+                # Generate AI recommendations
+                try:
+                    gemini_model = genai.GenerativeModel('models/gemini-1.5-pro')
+                    rec_prompt = f"""
+                    Based on the following patient health data:
+
+                    - Age: {age}
+                    - Sex: {'Male' if sex_encoded == 1 else 'Female'}
+                    - Chest Pain Type: {chest_pain}
+                    - Blood Pressure: {bp} mmHg
+                    - Cholesterol: {cholesterol} mg/dL
+                    - Fasting Blood Sugar > 120: {'Yes' if fbs_encoded == 1 else 'No'}
+                    - EKG Results: {ekg}
+                    - Max Heart Rate: {max_hr}
+                    - Exercise Angina: {'Yes' if exercise_angina_encoded == 1 else 'No'}
+                    - ST Depression: {st_depression}
+                    - Slope of ST: {slope}
+                    - Number of Major Vessels: {vessels}
+                    - Thallium Test: {thallium}
+
+                    The AI model predicted: {'Heart Disease Present' if prediction == 1 else 'No Heart Disease'} with a probability of {probability*100:.1f}%.
+
+                    Provide 4-6 personalized health recommendations as a numbered or bulleted list.
+                    """
+                    rec_response = gemini_model.generate_content(rec_prompt)
+                    recommendations = [line.strip('-•123456. ').strip() for line in rec_response.text.split('\n') if line.strip() and not line.lower().startswith(('based', 'provide', 'the ai'))]
+                    recommendations = recommendations[:6]  # Limit to 6
+                except Exception as e:
+                    recommendations = [f"Unable to generate AI recommendations: {e}"]
                 
                 # Display Results
                 st.markdown("---")
@@ -511,7 +553,38 @@ elif page == "🔮 Prediction":
                     st.metric("Cholesterol", f"{cholesterol} mg/dL")
                 with summary_col4:
                     st.metric("Max Heart Rate", f"{max_hr} bpm")
-                
+
+                # AI Explanation
+                st.markdown("### 🤖 AI Explanation")
+                with st.spinner("Generating explanation..."):
+                    try:
+                        gemini_model = genai.GenerativeModel('models/gemini-1.5-pro')
+                        prompt = f"""
+                        Based on the following patient health data:
+
+                        - Age: {age}
+                        - Sex: {'Male' if sex_encoded == 1 else 'Female'}
+                        - Chest Pain Type: {chest_pain}
+                        - Blood Pressure: {bp} mmHg
+                        - Cholesterol: {cholesterol} mg/dL
+                        - Fasting Blood Sugar > 120: {'Yes' if fbs_encoded == 1 else 'No'}
+                        - EKG Results: {ekg}
+                        - Max Heart Rate: {max_hr}
+                        - Exercise Angina: {'Yes' if exercise_angina_encoded == 1 else 'No'}
+                        - ST Depression: {st_depression}
+                        - Slope of ST: {slope}
+                        - Number of Major Vessels: {vessels}
+                        - Thallium Test: {thallium}
+
+                        The AI model predicted: {'Heart Disease Present' if prediction == 1 else 'No Heart Disease'} with a probability of {probability*100:.1f}%.
+
+                        Please provide a detailed explanation of the risk factors, what this prediction means, and personalized health advice.
+                        """
+                        response = gemini_model.generate_content(prompt)
+                        st.write(response.text)
+                    except Exception as e:
+                        st.error(f"Error generating explanation: {e}")
+
             except Exception as e:
                 st.error(f"❌ Prediction Error: {e}")
                 st.info("Please check if all model files are properly loaded.")
@@ -588,6 +661,49 @@ elif page == "📊 Dashboard":
         )
         fig.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
+
+# ============================================
+# Chatbot Page
+# ============================================
+
+elif page == "🤖 Chatbot":
+    st.markdown("## 🤖 Heart Health AI Chatbot")
+    st.markdown("Ask me anything about heart health, risk factors, prevention, or get explanations about your predictions!")
+
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+        # System message
+        st.session_state.messages.append({"role": "assistant", "content": "Hello! I'm your AI heart health assistant. I can help you understand heart disease risk factors, provide general health advice, and answer questions about cardiovascular health. How can I assist you today?"})
+
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask me about heart health..."):
+        # Add user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Generate response
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    if "chat_session" not in st.session_state:
+                        model = genai.GenerativeModel('models/gemini-1.5-pro')
+                        st.session_state.chat_session = model.start_chat(history=[])
+                        # Set system prompt
+                        st.session_state.chat_session.send_message("You are a helpful AI assistant specializing in heart health and cardiovascular disease. Provide accurate, evidence-based information about heart disease prevention, risk factors, symptoms, and general health advice. Always remind users that you're not a substitute for professional medical advice.")
+                    response = st.session_state.chat_session.send_message(prompt)
+                    st.markdown(response.text)
+                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+                except Exception as e:
+                    error_msg = f"Sorry, I encountered an error: {e}"
+                    st.error(error_msg)
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
 # ============================================
 # About Page
