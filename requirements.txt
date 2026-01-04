@@ -7,3 +7,7 @@ imbalanced-learn
 joblib
 plotly
 google-generativeai
+python-dotenv
+fastapi
+uvicorn
+requests

@@ -1,5 +1,5 @@
 # ============================================
-# HEART DISEASE PREDICTOR - SIMPLE VERSION
+# HEART DISEASE PREDICTOR - UPDATED VERSION
 # ============================================
 
 import streamlit as st
@@ -9,6 +9,27 @@ import joblib
 import plotly.graph_objects as go
 import plotly.express as px
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+import requests
+
+# Load environment variables
+load_dotenv()
+
+# New Google GenAI package
+import google.generativeai as genai
+
+# Configure Gemini API with new package
+api_key = os.getenv("GEMINI_API_KEY")
+client = None
+if api_key:
+    try:
+        genai.configure(api_key=api_key)
+        client = genai.GenerativeModel("gemini-2.0-flash-exp")
+    except Exception as e:
+        st.warning(f"⚠️ Failed to initialize Gemini: {e}")
+else:
+    st.warning("⚠️ GEMINI_API_KEY not found in environment variables")
 
 # ============================================
 # Page Configuration
@@ -33,9 +54,14 @@ def load_model():
         scaler_path = base_path / "models" / "scaler.pkl"
         feature_names_path = base_path / "models" / "feature_names.pkl"
         
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
-        feature_names = joblib.load(feature_names_path)
+        # Suppress sklearn version warning
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = joblib.load(model_path)
+            scaler = joblib.load(scaler_path)
+            feature_names = joblib.load(feature_names_path)
+        
         return model, scaler, feature_names, True
     except Exception as e:
         st.error(f"Error loading model: {e}")
@@ -65,7 +91,10 @@ def preprocess_input(input_data):
     df = df.reindex(columns=feature_names, fill_value=0)
     
     # Scale
-    scaled_data = scaler.transform(df)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        scaled_data = scaler.transform(df)
     return scaled_data
 
 def get_risk_level(probability):
@@ -78,31 +107,123 @@ def get_risk_level(probability):
         return "High Risk", "🔴", "#dc3545"
 
 def get_recommendations(probability, data):
-    """Generate recommendations"""
+    """Generate basic recommendations (fallback)"""
     recommendations = []
-    
+
     if probability > 0.5:
-        recommendations.append("🏥 Schedule an appointment with a cardiologist")
-    
+        recommendations.append("🏥 Schedule an appointment with a cardiologist for comprehensive evaluation")
+
     if data.get('Cholesterol', 0) > 200:
-        recommendations.append("🥗 Reduce cholesterol - follow a heart-healthy diet")
-    
+        recommendations.append("🥗 Reduce cholesterol intake - follow a heart-healthy diet rich in omega-3 fatty acids")
+
     if data.get('BP', 0) > 140:
-        recommendations.append("💊 Monitor blood pressure regularly")
-    
+        recommendations.append("💊 Monitor blood pressure regularly and consider lifestyle modifications")
+
     if data.get('Max HR', 200) < 100:
-        recommendations.append("🏃 Increase physical activity gradually")
-    
+        recommendations.append("🏃 Increase physical activity gradually with doctor's approval")
+
     if data.get('FBS over 120', 0) == 1:
-        recommendations.append("🍬 Control blood sugar levels")
-    
+        recommendations.append("🍬 Control blood sugar levels through diet and regular monitoring")
+
     if data.get('Age', 0) > 50:
-        recommendations.append("📅 Regular annual health checkups recommended")
+        recommendations.append("📅 Regular annual health checkups and cardiovascular screenings recommended")
+
+    # Additional recommendations to ensure at least 5
+    additional_recs = [
+        "💧 Stay hydrated and drink at least 8 glasses of water daily",
+        "🛌 Ensure 7-8 hours of quality sleep each night",
+        "🚭 Avoid smoking and limit alcohol consumption",
+        "🧘 Practice stress management techniques like meditation or yoga",
+        "🥦 Include more fruits, vegetables, and whole grains in your diet"
+    ]
     
-    if len(recommendations) == 0:
-        recommendations.append("✅ Maintain healthy lifestyle and regular checkups")
+    for rec in additional_recs:
+        if len(recommendations) >= 5:
+            break
+        if rec not in recommendations:
+            recommendations.append(rec)
+
+    return recommendations[:5]
+
+def get_gemini_recommendations(probability, data):
+    """Generate AI recommendations using Google Gemini - at least 5 recommendations"""
+    global client
     
-    return recommendations
+    try:
+        if not client:
+            st.warning("⚠️ Gemini client not initialized. Using basic recommendations.")
+            return get_recommendations(probability, data)
+
+        prompt = f"""
+        You are a medical health advisor AI. Based on the following heart disease risk assessment data, 
+        provide EXACTLY 5 personalized, actionable health recommendations.
+        
+        Focus on evidence-based advice for heart health improvement.
+
+        **Risk Assessment Results:**
+        - Risk Probability: {probability*100:.1f}%
+        - Risk Level: {'High' if probability > 0.6 else 'Medium' if probability > 0.3 else 'Low'}
+        
+        **Patient Data:**
+        - Age: {data.get('Age', 'N/A')} years
+        - Sex: {'Male' if data.get('Sex', 0) == 1 else 'Female'}
+        - Blood Pressure: {data.get('BP', 'N/A')} mmHg {'(High)' if data.get('BP', 0) > 140 else '(Normal)' if data.get('BP', 0) > 90 else '(Low)'}
+        - Cholesterol: {data.get('Cholesterol', 'N/A')} mg/dL {'(High)' if data.get('Cholesterol', 0) > 200 else '(Normal)'}
+        - Maximum Heart Rate: {data.get('Max HR', 'N/A')} bpm
+        - Fasting Blood Sugar > 120: {'Yes (Elevated)' if data.get('FBS over 120', 0) == 1 else 'No (Normal)'}
+        - Chest Pain Type: {data.get('Chest pain type', 'N/A')}
+        - Exercise Induced Angina: {'Yes' if data.get('Exercise angina', 0) == 1 else 'No'}
+        - ST Depression: {data.get('ST depression', 'N/A')}
+
+        **Instructions:**
+        1. Provide EXACTLY 5 recommendations
+        2. Start each recommendation with a relevant emoji
+        3. Make each recommendation specific and actionable
+        4. Consider the patient's specific risk factors
+        5. Include both immediate actions and lifestyle changes
+        
+        Format: Start each recommendation on a new line with an emoji.
+        """
+
+        # Use new API format
+        response = client.generate_content(prompt)
+        
+        recommendations_text = response.text.strip()
+
+        # Parse recommendations
+        lines = recommendations_text.split('\n')
+        recommendations = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('**'):
+                continue
+            # Remove bullet points or numbers
+            if line.startswith(('-', '*', '•')):
+                line = line[1:].strip()
+            # Remove numbered prefixes like "1.", "2.", etc.
+            if len(line) > 2 and line[0].isdigit() and line[1] in '.):':
+                line = line[2:].strip()
+            
+            if line and len(line) > 10:
+                # Add emoji if missing
+                if not any(ord(c) > 127 for c in line[:2]):
+                    emojis = ['🏥', '🥗', '💊', '🏃', '🍬', '📅', '✅', '🩺', '💓', '🥦', '🚶', '🏋️', '🛌', '🚭', '💧']
+                    line = f"{emojis[len(recommendations) % len(emojis)]} {line}"
+                recommendations.append(line)
+        
+        # Ensure at least 5 recommendations
+        if len(recommendations) < 5:
+            fallback_recs = get_recommendations(probability, data)
+            for rec in fallback_recs:
+                if rec not in recommendations and len(recommendations) < 5:
+                    recommendations.append(rec)
+        
+        return recommendations[:5]
+
+    except Exception as e:
+        st.warning(f"⚠️ AI recommendations unavailable: {str(e)}")
+        return get_recommendations(probability, data)
 
 def create_gauge_chart(probability):
     """Create gauge chart for risk visualization"""
@@ -139,6 +260,12 @@ with st.sidebar:
     else:
         st.error("❌ Model Not Found")
     
+    # Gemini Status
+    if client:
+        st.success("✅ Gemini AI Connected")
+    else:
+        st.warning("⚠️ Gemini Not Connected")
+    
     st.markdown("---")
     
     # Navigation
@@ -148,7 +275,7 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    st.info("**Model:** XGBoost\n\n**Accuracy:** ~92%")
+    st.info("**Model:** XGBoost\n\n**Accuracy:** ~92%\n\n**AI:** Google Gemini 2.0")
 
 # ============================================
 # Home Page
@@ -160,7 +287,7 @@ if page == "🏠 Home":
     
     st.markdown("---")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("Accuracy", "92%+")
@@ -168,6 +295,8 @@ if page == "🏠 Home":
         st.metric("Features", "13+")
     with col3:
         st.metric("Response", "Instant")
+    with col4:
+        st.metric("AI Recs", "5+")
     
     st.markdown("---")
     
@@ -175,7 +304,12 @@ if page == "🏠 Home":
     ### How It Works
     1. **Enter Data** - Input patient health metrics
     2. **AI Analysis** - ML model processes data
-    3. **Get Results** - Receive risk score and recommendations
+    3. **Get Results** - Receive risk score and **5+ AI recommendations**
+    
+    ### Features
+    - 🤖 **Google Gemini 2.0 AI** for personalized recommendations
+    - 📊 **XGBoost ML Model** for accurate predictions
+    - 📈 **Interactive visualizations** for easy understanding
     
     ### Get Started
     👈 Select **Prediction** from the sidebar to begin!
@@ -243,72 +377,85 @@ elif page == "🔮 Prediction":
     st.markdown("---")
     
     # Predict Button
-    if st.button("🔮 Predict Risk", use_container_width=True):
-        
-        input_data = {
-            'Age': age,
-            'Sex': sex_encoded,
-            'Chest pain type': chest_pain_encoded,
-            'BP': bp,
-            'Cholesterol': cholesterol,
-            'FBS over 120': fbs_encoded,
-            'EKG results': ekg_encoded,
-            'Max HR': max_hr,
-            'Exercise angina': exercise_angina_encoded,
-            'ST depression': st_depression,
-            'Slope of ST': slope_encoded,
-            'Number of vessels fluro': vessels,
-            'Thallium': thallium_encoded
-        }
-        
-        with st.spinner("Analyzing..."):
+    if st.button("🔮 Predict Risk", use_container_width=True, type="primary"):
+
+        with st.spinner("🔄 Analyzing with AI..."):
             try:
-                # Predict
-                processed_data = preprocess_input(input_data)
-                prediction = model.predict(processed_data)[0]
-                probability = model.predict_proba(processed_data)[0][1]
-                
-                risk_level, emoji, color = get_risk_level(probability)
-                recommendations = get_recommendations(probability, input_data)
-                
-                # Results
-                st.markdown("---")
-                st.subheader("📊 Results")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    result_text = "Heart Disease Detected" if prediction == 1 else "No Heart Disease"
-                    
-                    st.markdown(f"""
-                    ### {emoji} {result_text}
-                    
-                    **Risk Level:** {risk_level}
-                    
-                    **Probability:** {probability*100:.1f}%
-                    
-                    **Confidence:** {max(probability, 1-probability)*100:.1f}%
-                    """)
-                
-                with col2:
-                    fig = create_gauge_chart(probability)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Recommendations
-                st.subheader("💡 Recommendations")
-                for rec in recommendations:
-                    st.info(rec)
-                
-                # Summary
-                st.subheader("📋 Summary")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Age", f"{age} years")
-                col2.metric("BP", f"{bp} mmHg")
-                col3.metric("Cholesterol", f"{cholesterol} mg/dL")
-                col4.metric("Max HR", f"{max_hr} bpm")
-                
+                # Call the backend API
+                api_data = {
+                    "age": age,
+                    "sex": sex_encoded,
+                    "chest_pain_type": chest_pain_encoded,
+                    "bp": bp,
+                    "cholesterol": cholesterol,
+                    "fbs_over_120": fbs_encoded,
+                    "ekg_results": ekg_encoded,
+                    "max_hr": max_hr,
+                    "exercise_angina": exercise_angina_encoded,
+                    "st_depression": st_depression,
+                    "slope_of_st": slope_encoded,
+                    "number_of_vessels_fluro": vessels,
+                    "thallium": thallium_encoded
+                }
+
+                response = requests.post("http://localhost:8000/predict", json=api_data)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    prediction = result['prediction']
+                    probability = result['probability']
+                    risk_level = result['risk_level']
+                    emoji = result['risk_emoji']
+                    recommendations = result['recommendations']
+
+                    # Results
+                    st.markdown("---")
+                    st.subheader("📊 Results")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        result_text = "Heart Disease Detected" if prediction == 1 else "No Heart Disease"
+
+                        st.markdown(f"""
+                        ### {emoji} {result_text}
+
+                        **Risk Level:** {risk_level}
+
+                        **Probability:** {probability*100:.1f}%
+
+                        **Confidence:** {max(probability, 1-probability)*100:.1f}%
+                        """)
+
+                    with col2:
+                        fig = create_gauge_chart(probability)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # AI Recommendations Section
+                    st.markdown("---")
+                    st.subheader("🤖 AI-Powered Recommendations (Powered by Google Gemini)")
+                    st.caption(f"Generated {len(recommendations)} personalized recommendations based on your health data")
+
+                    # Display recommendations in a nice format
+                    for i, rec in enumerate(recommendations, 1):
+                        st.info(f"**{i}.** {rec}")
+
+                    # Summary
+                    st.markdown("---")
+                    st.subheader("📋 Patient Summary")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Age", f"{age} years")
+                    col2.metric("BP", f"{bp} mmHg", "High" if bp > 140 else "Normal")
+                    col3.metric("Cholesterol", f"{cholesterol} mg/dL", "High" if cholesterol > 200 else "Normal")
+                    col4.metric("Max HR", f"{max_hr} bpm")
+
+                else:
+                    st.error(f"❌ API Error: {response.status_code} - {response.text}")
+
             except Exception as e:
-                st.error(f"❌ Error: {e}")
+                st.error(f"❌ Error during prediction: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
 # ============================================
 # Dashboard Page
@@ -368,20 +515,25 @@ elif page == "📖 About":
     st.markdown("""
     ## Heart Disease Predictor
     
-    An AI-powered tool for predicting heart disease risk.
+    An AI-powered tool for predicting heart disease risk with **personalized recommendations**.
     
-    ### Technology
-    - **Model:** XGBoost Classifier
+    ### Technology Stack
+    - **ML Model:** XGBoost Classifier
+    - **AI Recommendations:** Google Gemini 2.0 Flash
     - **Frontend:** Streamlit
-    - **Charts:** Plotly
+    - **Visualizations:** Plotly
     
-    ### Features Used
+    ### Features Used for Prediction
     - Age, Sex, Chest Pain Type
     - Blood Pressure, Cholesterol
     - Fasting Blood Sugar, EKG Results
     - Max Heart Rate, Exercise Angina
     - ST Depression, Slope of ST
     - Number of Vessels, Thallium Test
+    
+    ### AI Recommendations
+    The system uses **Google Gemini 2.0 AI** to generate at least **5 personalized recommendations** 
+    based on your specific health data and risk factors.
     
     ### ⚠️ Disclaimer
     This tool is for **educational purposes only**. 
@@ -393,4 +545,4 @@ elif page == "📖 About":
 # ============================================
 
 st.markdown("---")
-st.markdown("Made with ❤️ using Streamlit")
+st.markdown("Made with ❤️ using Streamlit | Powered by Google Gemini 2.0 AI")
