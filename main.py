@@ -7,7 +7,7 @@ import warnings
 from pathlib import Path
 from dotenv import load_dotenv
 import os
-import google.generativeai as genai
+import google.genai as genai
 
 # Load environment variables
 load_dotenv()
@@ -17,8 +17,7 @@ api_key = os.getenv("GEMINI_API_KEY")
 client = None
 if api_key:
     try:
-        genai.configure(api_key=api_key)
-        client = genai.GenerativeModel("gemini-2.0-flash-exp")
+        client = genai.Client(api_key=api_key)
     except Exception as e:
         print(f"Failed to initialize Gemini: {e}")
 
@@ -178,7 +177,7 @@ def get_gemini_recommendations(probability, data):
         Format: Start each recommendation on a new line with an emoji.
         """
 
-        response = client.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-2.0-flash-exp", contents=prompt)
 
         recommendations_text = response.text.strip()
 

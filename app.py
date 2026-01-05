@@ -17,15 +17,14 @@ import requests
 load_dotenv()
 
 # New Google GenAI package
-import google.generativeai as genai
+import google.genai as genai
 
 # Configure Gemini API with new package
 api_key = os.getenv("GEMINI_API_KEY")
 client = None
 if api_key:
     try:
-        genai.configure(api_key=api_key)
-        client = genai.GenerativeModel("gemini-2.0-flash-exp")
+        client = genai.Client(api_key=api_key)
     except Exception as e:
         st.warning(f"⚠️ Failed to initialize Gemini: {e}")
 else:
@@ -186,7 +185,7 @@ def get_gemini_recommendations(probability, data):
         """
 
         # Use new API format
-        response = client.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-2.0-flash-exp", contents=prompt)
         
         recommendations_text = response.text.strip()
 
